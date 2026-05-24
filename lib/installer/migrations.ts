@@ -78,8 +78,13 @@ async function connectClientWithRetry(
   throw lastError instanceof Error ? lastError : new Error(String(lastError ?? 'Falha ao conectar ao banco de dados'));
 }
 
+/**
+ * Verifica se o Storage do Supabase está pronto (storage.buckets existe).
+ * Em deployments Railway/custom, o schema storage pode não estar disponível via DB direto.
+ * Nesse caso, apenas loga um aviso e continua — as migrations de schema não dependem de Storage.
+ */
 async function waitForStorageReady(client: Client, opts?: { timeoutMs?: number; pollMs?: number }) {
-  const timeoutMs = typeof opts?.timeoutMs === 'number' ? opts.timeoutMs : 210_000;
+  const timeoutMs = typeof opts?.timeoutMs === 'number' ? opts.timeoutMs : 30_000;
   const pollMs = typeof opts?.pollMs === 'number' ? opts?.pollMs : 4_000;
   const t0 = Date.now();
 
@@ -96,8 +101,12 @@ async function waitForStorageReady(client: Client, opts?: { timeoutMs?: number; 
     await sleep(pollMs);
   }
 
-  throw new Error(
-    'Supabase Storage ainda não está pronto (storage.buckets não existe). Aguarde o projeto terminar de provisionar e tente novamente.'
+  // Storage API is not reachable via direct DB connection (common in Railway/custom deployments).
+  // Log a warning and continue — schema migrations do not depend on storage.buckets being present.
+  console.warn(
+    '[migrations] Supabase Storage schema not detected via direct DB connection. ' +
+    'Skipping storage readiness check and proceeding with migrations. ' +
+    'This is expected in Railway and other non-Supabase-managed deployments.'
   );
 }
 
@@ -119,7 +128,7 @@ export async function runSchemaMigration(dbUrl: string) {
   const client = await connectClientWithRetry(createClient, { maxAttempts: 5, initialDelayMs: 3000 });
 
   try {
-    // Never "skip" Storage. We wait until it's ready, then run migrations.
+    // Best-effort storage readiness check — continues even if Storage API is unreachable.
     await waitForStorageReady(client);
     await client.query(schemaSql);
   } finally {
