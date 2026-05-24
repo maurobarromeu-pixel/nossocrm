@@ -32,7 +32,7 @@ const RunSchema = z
       teamId: z.string().optional(),
       projectId: z.string().min(1),
       targets: z.array(z.enum(['production', 'preview'])).min(1),
-    }),
+    }).optional(),
     supabase: z.object({
       url: z.string().url(),
       anonKey: z.string().min(1).optional(),
@@ -105,7 +105,6 @@ export async function POST(req: Request) {
   };
 
   const { vercel, supabase, admin } = parsed.data;
-  const envTargets = vercel.targets;
 
   try {
     // Magic: if the student provided a PAT, we can resolve missing Supabase fields automatically.
@@ -122,7 +121,7 @@ export async function POST(req: Request) {
     const needsKeys = !resolvedAnonKey || !resolvedServiceRoleKey;
     const needsDb = !resolvedDbUrl;
 
-    // “100% mágico”: se não existir nenhuma Edge Function no repo, não exigir PAT só por deploy.
+    // "100% mágico": se não existir nenhuma Edge Function no repo, não exigir PAT só por deploy.
     const localEdgeFunctionSlugs = supabase.deployEdgeFunctions
       ? await listEdgeFunctionSlugs()
       : [];
@@ -174,49 +173,51 @@ export async function POST(req: Request) {
       resolvedDbUrl = db.dbUrl;
     }
 
-    startStep('vercel_envs');
-    await upsertProjectEnvs(
-      vercel.token,
-      vercel.projectId,
-      [
-        {
-          key: 'NEXT_PUBLIC_SUPABASE_URL',
-          value: supabase.url,
-          targets: envTargets,
-        },
-        // New publishable key format (recommended)
-        {
-          key: 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
-          value: resolvedAnonKey,
-          targets: envTargets,
-        },
-        // Legacy anon key (fallback for older projects)
-        {
-          key: 'NEXT_PUBLIC_SUPABASE_ANON_KEY',
-          value: resolvedAnonKey,
-          targets: envTargets,
-        },
-        // New secret key format (recommended)
-        {
-          key: 'SUPABASE_SECRET_KEY',
-          value: resolvedServiceRoleKey,
-          targets: envTargets,
-        },
-        // Legacy service_role key (fallback for older projects)
-        {
-          key: 'SUPABASE_SERVICE_ROLE_KEY',
-          value: resolvedServiceRoleKey,
-          targets: envTargets,
-        },
-        {
-          key: 'INSTALLER_ENABLED',
-          value: 'false',
-          targets: envTargets,
-        },
-      ],
-      vercel.teamId || undefined
-    );
-    finishStep('vercel_envs', 'Environment variables configured (installer will be disabled).');
+    if (vercel) {
+      startStep('vercel_envs');
+      await upsertProjectEnvs(
+        vercel.token,
+        vercel.projectId,
+        [
+          {
+            key: 'NEXT_PUBLIC_SUPABASE_URL',
+            value: supabase.url,
+            targets: vercel.targets,
+          },
+          // New publishable key format (recommended)
+          {
+            key: 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
+            value: resolvedAnonKey,
+            targets: vercel.targets,
+          },
+          // Legacy anon key (fallback for older projects)
+          {
+            key: 'NEXT_PUBLIC_SUPABASE_ANON_KEY',
+            value: resolvedAnonKey,
+            targets: vercel.targets,
+          },
+          // New secret key format (recommended)
+          {
+            key: 'SUPABASE_SECRET_KEY',
+            value: resolvedServiceRoleKey,
+            targets: vercel.targets,
+          },
+          // Legacy service_role key (fallback for older projects)
+          {
+            key: 'SUPABASE_SERVICE_ROLE_KEY',
+            value: resolvedServiceRoleKey,
+            targets: vercel.targets,
+          },
+          {
+            key: 'INSTALLER_ENABLED',
+            value: 'false',
+            targets: vercel.targets,
+          },
+        ],
+        vercel.teamId || undefined
+      );
+      finishStep('vercel_envs', 'Environment variables configured (installer will be disabled).');
+    }
 
     startStep('supabase_project_ready');
     if (resolvedAccessToken && resolvedProjectRef) {
@@ -296,17 +297,19 @@ export async function POST(req: Request) {
     }
     finishStep('supabase_bootstrap', `Organization ${bootstrap.organizationId} created.`);
 
-    try {
-      await triggerProjectRedeploy(
-        vercel.token,
-        vercel.projectId,
-        vercel.teamId || undefined
-      );
-      updateStep(steps, 'vercel_redeploy', 'ok', 'Redeploy triggered.');
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : 'Failed to redeploy via Vercel API';
-      updateStep(steps, 'vercel_redeploy', 'warning', message);
+    if (vercel) {
+      try {
+        await triggerProjectRedeploy(
+          vercel.token,
+          vercel.projectId,
+          vercel.teamId || undefined
+        );
+        updateStep(steps, 'vercel_redeploy', 'ok', 'Redeploy triggered.');
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : 'Failed to redeploy via Vercel API';
+        updateStep(steps, 'vercel_redeploy', 'warning', message);
+      }
     }
 
     return json({ ok: true, steps, functions });
